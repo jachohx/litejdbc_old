@@ -17,10 +17,10 @@ limitations under the License.
 
 package org.jachohx.litejdbc;
 
+import org.jachohx.litejdbc.util.Convert;
 import org.javalite.activejdbc.associations.*;
 import org.javalite.activejdbc.cache.QueryCache;
 import org.javalite.activejdbc.validation.*;
-import org.javalite.common.Convert;
 import org.javalite.common.XmlEntities;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -758,57 +758,6 @@ public abstract class Model extends CallbackSupport implements Externalizable {
     }
 
     /**
-     * Generates a XML document from content of this model.
-     *
-     * @param spaces by how many spaces to indent.
-     * @param declaration true to include XML declaration at the top
-     * @param attrs list of attributes to include. No arguments == include all attributes.
-     * @return generated XML.
-     *
-     * @deprecated use {@link #toXml(boolean, boolean, String...)} instead
-     */
-    @Deprecated
-    public String toXml(int spaces, boolean declaration, String... attrs){
-        return toXml(spaces > 0, declaration, attrs);
-    }
-
-    /**
-     * Override in a subclass to inject custom content onto XML just before the closing tag.
-     *
-     * <p>To keep the formatting, it is recommended to implement this method as the example below.
-     *
-     * <blockquote><pre>
-     * if (pretty) { sb.append(ident); }
-     * sb.append("&lt;test&gt;...&lt;/test&gt;");
-     * if (pretty) { sb.append('\n'); }
-     * </pre></blockquote>
-     *
-     * @param sb to write content to.
-     * @param pretty pretty format (human readable), or one line text.
-     * @param indent indent at current level
-     * @param attrs list of attributes to include
-     */
-    public void beforeClosingTag(StringBuilder sb, boolean pretty, String indent, String... attrs) {
-        StringWriter writer = new StringWriter();
-        beforeClosingTag(indent.length(), writer, attrs);
-        sb.append(writer.toString());
-    }
-
-    /**
-     * Override in a subclass to inject custom content onto XML just before the closing tag.
-     *
-     * @param spaces number of spaces of indent
-     * @param writer to write content to.
-     * @param attrs list of attributes to include
-     *
-     * @deprecated Use {@link #beforeClosingTag(StringBuilder, boolean, String, String...)} instead
-     */
-    @Deprecated
-    public void beforeClosingTag(int spaces, StringWriter writer, String ... attrs) {
-        // do nothing
-    }
-
-    /**
      * Generates a JSON document from content of this model.
      *
      * @param pretty pretty format (human readable), or one line text.
@@ -892,165 +841,6 @@ public abstract class Model extends CallbackSupport implements Externalizable {
         sb.append('}');
     }
 
-    /**
-     * Override in subclasses in order to inject custom content into Json just before the closing brace.
-     *
-     * <p>To keep the formatting, it is recommended to implement this method as the example below.
-     *
-     * <blockquote><pre>
-     * sb.append(',');
-     * if (pretty) { sb.append('\n').append(indent); }
-     * sb.append("\"test\":\"...\"");
-     * </pre></blockquote>
-     *
-     * @param sb to write custom content to
-     * @param pretty pretty format (human readable), or one line text.
-     * @param indent indent at current level
-     * @param attrs list of attributes to include
-     */
-    public void beforeClosingBrace(StringBuilder sb, boolean pretty, String indent, String... attrs) {
-        StringWriter writer = new StringWriter();
-        beforeClosingBrace(pretty, indent, writer);
-        sb.append(writer.toString());
-    }
-
-    /**
-     * Override in subclasses in order to inject custom content into Json just before the closing brace.
-     *
-     * @param pretty pretty format (human readable), or one line text.
-     * @param indent indent at current level
-     * @param writer writer to write custom content to
-     */
-    @Deprecated
-    public void beforeClosingBrace(boolean pretty, String indent, StringWriter writer) {
-        // do nothing
-    }
-
-    /**
-     * Returns parent of this model, assuming that this table represents a child.
-     * This method may return <code>null</code> in cases when you have orphan record and
-     * referential integrity is not enforced in DBMS with a foreign key constraint.
-     *
-     * @param parentClass   class of a parent model.
-     * @return instance of a parent of this instance in the "belongs to"  relationship.
-     */
-    public <T extends Model> T parent(Class<T> parentClass) {
-        return parent(parentClass, false);
-    }
-
-    public <T extends Model> T parent(Class<T> parentClass, boolean cache) {
-        T cachedParent = parentClass.cast(cachedParents.get(parentClass));
-        if (cachedParent != null) {
-            return cachedParent;
-        }
-        MetaModel parentMM = Registry.instance().getMetaModel(parentClass);
-        String parentTable = parentMM.getTableName();
-
-        BelongsToAssociation ass = (BelongsToAssociation)getMetaModelLocal().getAssociationForTarget(parentTable, BelongsToAssociation.class);
-        BelongsToPolymorphicAssociation assP = (BelongsToPolymorphicAssociation)getMetaModelLocal()
-            .getAssociationForTarget(parentTable, BelongsToPolymorphicAssociation.class);
-
-        Object fkValue;
-        String fkName;
-        if (ass != null) {
-            fkValue = get(ass.getFkName());
-            fkName = ass.getFkName();
-        } else if (assP != null) {
-            fkValue = get("parent_id");
-            fkName = "parent_id";
-
-            if (!assP.getTypeLabel().equals(getString("parent_type"))) {
-                throw new IllegalArgumentException("Wrong parent: '" + parentClass + "'. Actual parent type label of this record is: '" + getString("parent_type") + "'");
-            }
-        } else {
-            throw new IllegalArgumentException("there is no association with table: " + parentTable);
-        }
-
-        if (fkValue == null) {
-            logger.debug("Attribute: {} is null, cannot determine parent. Child record: {}", fkName, this);
-            return null;
-        }
-        String parentIdName = parentMM.getIdName();
-        String query = getMetaModelLocal().getDialect().selectStarParametrized(parentTable, parentIdName);
-
-        T parent;
-        if (parentMM.cached()) {
-            parent = parentClass.cast(QueryCache.instance().getItem(parentTable, query, new Object[]{fkValue}));
-            if (parent != null) {
-                return parent;
-            }
-        }
-
-        List<Map> results = new DB(getMetaModelLocal().getDbName()).findAll(query, fkValue);
-        //expect only one result here
-        if (results.size() == 0) { //this should be covered by referential integrity constraint
-            return null;
-        } else {
-            try {
-                parent = parentClass.newInstance();
-                parent.hydrate(results.get(0));
-                if (parentMM.cached()) {
-                    QueryCache.instance().addItem(parentTable, query, new Object[]{fkValue}, parent);
-                }
-                if (cache) {
-                    setCachedParent(parent);
-                }
-                return parent;
-            } catch (Exception e) {
-                throw new InitException(e.getMessage(), e);
-            }
-        }
-    }
-
-    protected void setCachedParent(Model parent) {
-        if (parent != null) {
-            cachedParents.put(parent.getClass(), parent);
-        }
-    }
-
-
-    /**
-     * Sets multiple parents on this instance. Basically this sets a correct value of a foreign keys in a
-     * parent/child relationship. This only works for one to many and polymorphic associations.
-     *
-     * @param parents - collection of potential parents of this instance. Its ID values must not be null.
-     */
-    public void setParents(Model... parents){
-        for (Model parent : parents) {
-            setParent(parent);
-        }
-    }
-
-
-    /**
-     * Sets a parent on this instance. Basically this sets a correct value of a foreign key in a
-     * parent/child relationship. This only works for one to many and polymorphic associations.
-     * The act of setting a parent does not result in saving to a database.
-     *
-     * @param parent potential parent of this instance. Its ID value must not be null.
-     */
-    public void setParent(Model parent) {
-        if (parent == null || parent.getId() == null) {
-            throw new IllegalArgumentException("parent cannot ne null and parent ID cannot be null");
-        }
-        List<Association> associations = getMetaModelLocal().getAssociations();
-        for (Association association : associations) {
-            if (association instanceof BelongsToAssociation && association.getTarget().equals(parent.getMetaModelLocal().getTableName())) {
-                set(((BelongsToAssociation)association).getFkName(), parent.getId());
-                return;
-            }
-            if(association instanceof BelongsToPolymorphicAssociation && association.getTarget().equals(parent.getMetaModelLocal().getTableName())){
-                set("parent_id", parent.getId());
-                set("parent_type", ((BelongsToPolymorphicAssociation)association).getTypeLabel());
-                return;
-            }
-        }
-        StringBuilder sb = new StringBuilder();
-        sb.append("Class: ").append(parent.getClass()).append(" is not associated with ").append(this.getClass())
-                .append(", list of existing associations:\n");
-        join(sb, getMetaModelLocal().getAssociations(), "\n");
-        throw new IllegalArgumentException(sb.toString());
-    }
 
     /**
      * Copies all attribute values (except for ID, created_at and updated_at) from this instance to the other.
@@ -1192,51 +982,6 @@ public abstract class Model extends CallbackSupport implements Externalizable {
         }
     }
 
-
-    private Object tryPolymorphicParent(String parentTable){
-        MetaModel parentMM = inferTargetMetaModel(parentTable);
-        if(parentMM == null){
-            return null;
-        }else
-            return getMetaModelLocal().hasAssociation(parentMM.getTableName(), BelongsToPolymorphicAssociation.class) ?
-                parent(parentMM.getModelClass()): null;
-    }
-
-    private Object tryParent(String parentTable){
-        MetaModel parentMM = inferTargetMetaModel(parentTable);
-        if(parentMM == null){
-            return null;
-        }else
-            return getMetaModelLocal().hasAssociation(parentMM.getTableName(), BelongsToAssociation.class) ?
-                parent(parentMM.getModelClass()): null;
-    }
-
-    private Object tryPolymorphicChildren(String childTable){
-        MetaModel childMM = inferTargetMetaModel(childTable);
-        if(childMM == null){
-            return null;
-        }else
-            return getMetaModelLocal().hasAssociation(childMM.getTableName(), OneToManyPolymorphicAssociation.class) ?
-                getAll(childMM.getModelClass()): null;
-    }
-
-    private Object tryChildren(String childTable){
-        MetaModel childMM = inferTargetMetaModel(childTable);
-        if(childMM == null){
-            return null;
-        }else
-            return getMetaModelLocal().hasAssociation(childMM.getTableName(), OneToManyAssociation.class) ?
-                getAll(childMM.getModelClass()): null;
-    }
-
-    private Object tryOther(String otherTable){
-        MetaModel otherMM = inferTargetMetaModel(otherTable);
-        if(otherMM == null){
-            return null;
-        }else
-            return getMetaModelLocal().hasAssociation(otherMM.getTableName(), Many2ManyAssociation.class) ?
-                getAll(otherMM.getModelClass()): null;
-    }
 
     private MetaModel inferTargetMetaModel(String targetTableName){
         String targetTable = singularize(targetTableName);
@@ -1564,139 +1309,6 @@ public abstract class Model extends CallbackSupport implements Externalizable {
         return new LazyList<T>(subQuery, Registry.instance().getMetaModel(targetTable), allParams);
     }
 
-    protected static NumericValidationBuilder validateNumericalityOf(String... attributes) {
-        return ValidationHelper.addNumericalityValidators(getClassName(), ModelDelegate.toLowerCase(attributes));
-    }
-
-    /**
-     * Adds a validator to the model.
-     *
-     * @param validator new validator.
-     * @return
-     */
-    public static ValidationBuilder addValidator(Validator validator){
-        return ValidationHelper.addValidator(getClassName(), validator);
-    }
-
-    /**
-     * Adds a new error to the collection of errors. This is a convenience method to be used from custom validators.
-     *
-     * @param key - key wy which this error can be retrieved from a collection of errors: {@link #errors()}.
-     * @param value - this is a key of the message in the resource bundle.
-     * @see {@link Messages}.
-     */
-    public void addError(String key, String value){
-        errors.put(key, value);
-    }
-
-    public static void removeValidator(Validator validator){
-        Registry.instance().removeValidator(Model.<Model>getDaClass(), validator);
-    }
-
-    public static List<Validator> getValidators(Class<Model> daClass){
-        return Registry.instance().getValidators(daClass.getName());
-    }
-
-
-    /**
-     * Validates an attribite format with a ree hand regular expression.
-     *
-     * @param attribute attribute to validate.
-     * @param pattern regexp pattern which must match  the value.
-     * @return
-     */
-    protected static ValidationBuilder validateRegexpOf(String attribute, String pattern) {
-        return ValidationHelper.addRegexpValidator(getClassName(), attribute.toLowerCase(), pattern);
-    }
-
-    /**
-     * Validates email format.
-     *
-     * @param attribute name of atribute that holds email value.
-     * @return
-     */
-    protected static ValidationBuilder validateEmailOf(String attribute) {
-        return ValidationHelper.addEmailValidator(getClassName(), attribute.toLowerCase());
-    }
-
-    /**
-     * Validates range. Accepted types are all java.lang.Number subclasses:
-     * Byte, Short, Integer, Long, Float, Double BigDecimal.
-     *
-     * @param attribute attribute to validate - should be within range.
-     * @param min min value of range.
-     * @param max max value of range.
-     * @return
-     */
-    protected static ValidationBuilder validateRange(String attribute, Number min, Number max) {
-        return ValidationHelper.addRangeValidator(getClassName(), attribute.toLowerCase(), min, max);
-    }
-
-    /**
-     * The validation will not pass if the value is either an empty string "", or null.
-     *
-     * @param attributes list of attributes to validate.
-     * @return
-     */
-    protected static ValidationBuilder validatePresenceOf(String... attributes) {
-        return ValidationHelper.addPresenceValidators(getClassName(), ModelDelegate.toLowerCase(attributes));
-    }
-
-    /**
-     * Add a custom validator to the model.
-     *
-     * @param validator  custom validator.
-     */
-    protected static ValidationBuilder validateWith(Validator validator) {
-        return addValidator(validator);
-    }
-
-    /**
-     * Adds a custom converter to the model.
-     *
-     * @param converter custom converter
-     */
-    protected static ValidationBuilder convertWith(Converter converter) {
-        return addValidator(converter);
-    }
-
-    /**
-     * Converts a named attribute to <code>java.sql.Date</code> if possible.
-     * Acts as a validator if cannot make a conversion.
-     *
-     * @param attributeName name of attribute to convert to <code>java.sql.Date</code>.
-     * @param format format for conversion. Refer to {@link java.text.SimpleDateFormat}
-     * @return message passing for custom validation message.
-     */
-    protected static ValidationBuilder convertDate(String attributeName, String format){
-        return ValidationHelper.addDateConverter(getClassName(), attributeName, format);
-    }
-
-    /**
-     * Converts a named attribute to <code>java.sql.Timestamp</code> if possible.
-     * Acts as a validator if cannot make a conversion.
-     *
-     * @param attributeName name of attribute to convert to <code>java.sql.Timestamp</code>.
-     * @param format format for conversion. Refer to {@link java.text.SimpleDateFormat}
-     * @return message passing for custom validation message.
-     */
-    protected static ValidationBuilder convertTimestamp(String attributeName, String format){
-        return ValidationHelper.addTimestampConverter(getClassName(), attributeName, format);
-    }
-
-    public static boolean belongsTo(Class<? extends Model> targetClass) {
-        String targetTable = Registry.instance().getTableName(targetClass);
-        MetaModel metaModel = getMetaModel();
-        return (null != metaModel.getAssociationForTarget(targetTable, BelongsToAssociation.class) ||
-                null != metaModel.getAssociationForTarget(targetTable, Many2ManyAssociation.class));
-    }
-
-
-     public static void addCallbacks(CallbackListener ... listeners){
-         for(CallbackListener listener: listeners ){
-             Registry.instance().addListener(getDaClass(), listener);
-         }
-    }
 
     /**
      * This method performs validations and then returns true if no errors were generated, otherwise returns false.
@@ -2226,16 +1838,7 @@ public abstract class Model extends CallbackSupport implements Externalizable {
         MetaModel metaModel = getMetaModel();
         String sql = "SELECT COUNT(*) FROM " + metaModel.getTableName();
         Long result;
-        if(metaModel.cached()){
-         result = (Long)QueryCache.instance().getItem(metaModel.getTableName(), sql, null);
-            if(result == null)
-            {
-                result = new DB(metaModel.getDbName()).count(metaModel.getTableName());
-                QueryCache.instance().addItem(metaModel.getTableName(), sql, null, result);
-            }
-        }else{
-            result = new DB(metaModel.getDbName()).count(metaModel.getTableName());
-        }
+        result = new DB(metaModel.getDbName()).count(metaModel.getTableName());
         return result;
     }
 
@@ -2250,19 +1853,10 @@ public abstract class Model extends CallbackSupport implements Externalizable {
 
         MetaModel metaModel = getMetaModel();
 
-        //attention: this SQL is only used for caching, not for real queries.
         String sql = "SELECT COUNT(*) FROM " + metaModel.getTableName() + " where " + query;
 
         Long result;
-        if(metaModel.cached()){
-            result = (Long)QueryCache.instance().getItem(metaModel.getTableName(), sql, params);
-            if(result == null){
-                result = new DB(metaModel.getDbName()).count(metaModel.getTableName(), query, params);
-                QueryCache.instance().addItem(metaModel.getTableName(), sql, params, result);
-            }
-        }else{
-            result = new DB(metaModel.getDbName()).count(metaModel.getTableName(), query, params);
-        }
+        result = new DB(metaModel.getDbName()).count(metaModel.getTableName(), query, params);
         return result;
     }
 
